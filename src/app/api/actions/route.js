@@ -202,7 +202,11 @@ export async function POST(request) {
 
     // Update subscription
     if (action !== 'mark_payment') {
-      await supabaseAdmin.from('subscriptions').update(updateData).eq('id', subscription_id);
+      const { error: updateError } = await supabaseAdmin.from('subscriptions').update(updateData).eq('id', subscription_id);
+      if (updateError) {
+        console.error('Supabase update error:', updateError);
+        return NextResponse.json({ error: 'Database update failed: ' + updateError.message }, { status: 500 });
+      }
     }
 
     // Log action
