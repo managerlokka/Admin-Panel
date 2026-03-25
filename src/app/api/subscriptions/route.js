@@ -4,7 +4,7 @@ import { requireAdmin } from '@/lib/auth';
 import crypto from 'crypto';
 
 function generateKey(plan) {
-  const prefix = plan === 'enterprise' ? 'ENT' : plan === 'pro' ? 'PRO' : plan === 'starter' ? 'STR' : 'TRL';
+  const prefix = plan === 'lifetime' ? 'LTM' : plan === 'enterprise' ? 'ENT' : plan === 'pro' ? 'PRO' : plan === 'starter' ? 'STR' : 'TRL';
   const part1 = crypto.randomBytes(2).toString('hex').toUpperCase();
   const part2 = crypto.randomBytes(2).toString('hex').toUpperCase();
   return `MLK-${prefix}-${part1}-${part2}`;
@@ -54,11 +54,17 @@ export async function POST(request) {
   try {
     const admin = await requireAdmin();
     const body = await request.json();
-    const { full_name, email, phone, plan, status, billing_start, billing_end, trial_end } = body;
+    const { full_name, email, phone, plan, status, billing_start, billing_end, trial_end, billing_term } = body;
 
     if (!full_name) {
       return NextResponse.json({ error: 'Customer name is required' }, { status: 400 });
     }
+
+    // Determine billing_term
+    let finalBillingTerm = billing_term || 'monthly';
+    const finalPlan = plan || 'trial';
+    if (finalPlan === 'lifetime') finalBillingTerm = 'lifetime';
+    if (!['monthly', 'yearly', 'two_year', 'lifetime'].includes(finalBillingTerm)) finalBillingTerm = 'monthly';
 
     // Create or find customer
     let customerId;
@@ -87,18 +93,30 @@ export async function POST(request) {
     }
 
     // Generate subscription key
-    const subscriptionKey = generateKey(plan || 'trial');
+    const subscriptionKey = generateKey(finalPlan);
 
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowISO = now.toISOString();
+
+    // Calculate billing_end based on billing_term
+    let calcBillingEnd = billing_end || null;
+    if (!calcBillingEnd && finalPlan !== 'trial') {
+      if (finalBillingTerm === 'monthly') calcBillingEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      else if (finalBillingTerm === 'yearly') calcBillingEnd = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate()).toISOString();
+      else if (finalBillingTerm === 'two_year') calcBillingEnd = new Date(now.getFullYear() + 2, now.getMonth(), now.getDate()).toISOString();
+      // lifetime: stays null
+    }
+
     const subData = {
       customer_id: customerId,
       subscription_key: subscriptionKey,
-      plan: plan || 'trial',
-      status: status || 'trial',
-      trial_start: plan === 'trial' || !plan ? now : null,
-      trial_end: trial_end || (plan === 'trial' || !plan ? new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString() : null),
-      billing_start: billing_start || (plan && plan !== 'trial' ? now : null),
-      billing_end: billing_end || null,
+      plan: finalPlan,
+      billing_term: finalBillingTerm,
+      status: status || (finalPlan === 'trial' ? 'trial' : 'active'),
+      trial_start: finalPlan === 'trial' || !plan ? nowISO : null,
+      trial_end: trial_end || (finalPlan === 'trial' || !plan ? new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString() : null),
+      billing_start: billing_start || (finalPlan !== 'trial' ? nowISO : null),
+      billing_end: calcBillingEnd,
     };
 
     const { data: sub, error: subErr } = await supabaseAdmin
@@ -109,9 +127,11 @@ export async function POST(request) {
 
     if (subErr) throw subErr;
 
-    // Create initial usage cycle for paid plans
-    if (plan && plan !== 'trial' && subData.billing_start) {
-      const cycleEnd = billing_end || new Date(new Date(subData.billing_start).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Create initial usage cycle (monthly cycles for all plans)
+    if (finalPlan !== 'trial' && subData.billing_start) {
+      const cycleEnd = (finalBillingTerm === 'monthly' && calcBillingEnd)
+        ? calcBillingEnd
+        : new Date(new Date(subData.billing_start).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
       await supabaseAdmin.from('usage_cycles').insert({
         subscription_id: sub.id,
         cycle_start: subData.billing_start,
@@ -119,18 +139,16 @@ export async function POST(request) {
       });
     }
 
-    // Log admin action
     await supabaseAdmin.from('admin_actions').insert({
       admin_user_id: admin.id,
       subscription_id: sub.id,
       customer_id: customerId,
       action_type: 'subscription_created',
-      action_note: `Created ${plan || 'trial'} subscription for ${full_name}`,
+      action_note: `Created ${finalPlan} (${finalBillingTerm}) subscription for ${full_name}`,
     });
 
-    // Track visitor event
     await supabaseAdmin.from('visitor_events').insert({
-      event_type: plan === 'trial' || !plan ? 'trial_signup' : 'account_created',
+      event_type: finalPlan === 'trial' ? 'trial_signup' : 'account_created',
       customer_id: customerId,
     });
 

@@ -30,27 +30,42 @@ export async function POST(request) {
     switch (action) {
       case 'change_plan': {
         const newPlan = data.plan;
-        if (!['starter', 'pro', 'enterprise'].includes(newPlan)) {
+        if (!['starter', 'pro', 'enterprise', 'lifetime'].includes(newPlan)) {
           return NextResponse.json({ error: 'Invalid plan' }, { status: 400 });
         }
         const now = new Date();
-        const billingEnd = data.billing_end
-          ? new Date(data.billing_end)
-          : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+        // Determine billing_term
+        let billingTerm = data.billing_term || 'monthly';
+        if (newPlan === 'lifetime') billingTerm = 'lifetime';
+        if (!['monthly', 'yearly', 'two_year', 'lifetime'].includes(billingTerm)) billingTerm = 'monthly';
+
+        // Calculate billing_end based on term
+        let billingEnd = null;
+        if (billingTerm === 'monthly') billingEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        else if (billingTerm === 'yearly') billingEnd = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
+        else if (billingTerm === 'two_year') billingEnd = new Date(now.getFullYear() + 2, now.getMonth(), now.getDate());
+        // lifetime: billingEnd stays null
 
         updateData.plan = newPlan;
+        updateData.billing_term = billingTerm;
         updateData.status = 'active';
         updateData.billing_start = now.toISOString();
-        updateData.billing_end = billingEnd.toISOString();
+        updateData.billing_end = billingEnd ? billingEnd.toISOString() : null;
 
-        // Auto-create usage cycle for the new billing period
+        // Create monthly usage cycle
+        const cycleEnd = billingTerm === 'monthly' && billingEnd
+          ? billingEnd
+          : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
         await supabaseAdmin.from('usage_cycles').insert({
           subscription_id,
           cycle_start: now.toISOString(),
-          cycle_end: billingEnd.toISOString(),
+          cycle_end: cycleEnd.toISOString(),
         });
 
-        actionNote = `Plan changed to ${newPlan} for ${sub.customers?.full_name}. Billing: ${now.toLocaleDateString()} → ${billingEnd.toLocaleDateString()}`;
+        const termLabel = { monthly: 'Monthly', yearly: 'Yearly', two_year: '2 Years', lifetime: 'Lifetime' }[billingTerm];
+        actionNote = `Plan changed to ${newPlan} (${termLabel}) for ${sub.customers?.full_name}.`;
         break;
       }
 

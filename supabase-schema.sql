@@ -55,17 +55,20 @@ CREATE TABLE admin_users (
 
 -- 2. Plan Configuration (dynamic limits & pricing)
 CREATE TABLE plan_config (
-    plan TEXT PRIMARY KEY CHECK (plan IN ('starter','pro','enterprise')),
+    plan TEXT PRIMARY KEY CHECK (plan IN ('starter','pro','enterprise','lifetime')),
     order_limit INT NOT NULL,
     extra_order_price NUMERIC(10,2) DEFAULT 0,
     monthly_price NUMERIC(10,2) NOT NULL,
+    yearly_price NUMERIC(10,2),
+    two_year_price NUMERIC(10,2),
     hard_stop BOOLEAN DEFAULT true,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO plan_config (plan, order_limit, extra_order_price, monthly_price, hard_stop) VALUES
-    ('starter', 250, 0, 1250, true),
-    ('pro', 600, 0, 1950, true),
-    ('enterprise', 3000, 5, 3450, false);
+INSERT INTO plan_config (plan, order_limit, extra_order_price, monthly_price, yearly_price, two_year_price, hard_stop) VALUES
+    ('starter', 250, 0, 1250, 12500, 25000, true),
+    ('pro', 600, 0, 1950, 19500, 39000, true),
+    ('enterprise', 3000, 5, 3450, 34500, 69000, false),
+    ('lifetime', 3000, 0, 24500, NULL, NULL, true);
 
 -- 3. Customers (normalized — single source of truth for customer data)
 CREATE TABLE customers (
@@ -83,7 +86,8 @@ CREATE TABLE subscriptions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
     subscription_key TEXT UNIQUE NOT NULL,
-    plan TEXT DEFAULT 'trial' CHECK (plan IN ('trial','starter','pro','enterprise')),
+    plan TEXT DEFAULT 'trial' CHECK (plan IN ('trial','starter','pro','enterprise','lifetime')),
+    billing_term TEXT DEFAULT 'monthly' CHECK (billing_term IN ('monthly','yearly','two_year','lifetime')),
     status TEXT DEFAULT 'trial' CHECK (status IN ('trial','active','expired','suspended','cancelled')),
     trial_start TIMESTAMPTZ,
     trial_end TIMESTAMPTZ,
@@ -277,7 +281,7 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Trial period has expired. Please purchase a subscription.', 'code', 'TRIAL_EXPIRED');
     END IF;
 
-    -- Check if billing expired
+    -- Check if billing expired (skip for lifetime — billing_end is NULL)
     IF v_sub.status = 'active' AND v_sub.billing_end IS NOT NULL AND v_sub.billing_end < v_now THEN
         UPDATE subscriptions SET status = 'expired', updated_at = v_now WHERE id = v_sub.id;
         RETURN jsonb_build_object('success', false, 'error', 'Subscription has expired. Please renew.', 'code', 'SUBSCRIPTION_EXPIRED');
@@ -313,7 +317,7 @@ BEGIN
     IF v_plan_limit IS NULL THEN
         v_plan_limit := CASE v_sub.plan
             WHEN 'starter' THEN 250 WHEN 'pro' THEN 600
-            WHEN 'enterprise' THEN 3000 WHEN 'trial' THEN 50 ELSE 0
+            WHEN 'enterprise' THEN 3000 WHEN 'lifetime' THEN 3000 WHEN 'trial' THEN 50 ELSE 0
         END;
     END IF;
 
@@ -321,6 +325,7 @@ BEGIN
         'success', true,
         'subscription_id', v_sub.id,
         'plan', v_sub.plan,
+        'billing_term', v_sub.billing_term,
         'status', v_sub.status,
         'trial_start', v_sub.trial_start,
         'trial_end', v_sub.trial_end,
@@ -383,7 +388,7 @@ BEGIN
         RETURN jsonb_build_object('valid', false, 'error', 'Trial expired.', 'code', 'TRIAL_EXPIRED', 'status', 'expired');
     END IF;
 
-    -- Billing expiry
+    -- Billing expiry (skip for lifetime — billing_end is NULL = always active)
     IF v_sub.status = 'active' AND v_sub.billing_end IS NOT NULL AND v_sub.billing_end < v_now THEN
         UPDATE subscriptions SET status = 'expired', updated_at = v_now WHERE id = v_sub.id;
         RETURN jsonb_build_object('valid', false, 'error', 'Subscription expired.', 'code', 'SUBSCRIPTION_EXPIRED', 'status', 'expired');
@@ -404,7 +409,7 @@ BEGIN
     IF v_plan_limit IS NULL THEN
         v_plan_limit := CASE v_sub.plan
             WHEN 'starter' THEN 250 WHEN 'pro' THEN 600
-            WHEN 'enterprise' THEN 3000 WHEN 'trial' THEN 50 ELSE 0
+            WHEN 'enterprise' THEN 3000 WHEN 'lifetime' THEN 3000 WHEN 'trial' THEN 50 ELSE 0
         END;
     END IF;
 
@@ -412,6 +417,7 @@ BEGIN
         'valid', true,
         'subscription_id', v_sub.id,
         'plan', v_sub.plan,
+        'billing_term', v_sub.billing_term,
         'status', v_sub.status,
         'trial_start', v_sub.trial_start,
         'trial_end', v_sub.trial_end,
@@ -498,7 +504,7 @@ BEGIN
     IF v_plan_limit IS NULL THEN
         v_plan_limit := CASE v_sub.plan
             WHEN 'starter' THEN 250 WHEN 'pro' THEN 600
-            WHEN 'enterprise' THEN 3000 WHEN 'trial' THEN 50 ELSE 0
+            WHEN 'enterprise' THEN 3000 WHEN 'lifetime' THEN 3000 WHEN 'trial' THEN 50 ELSE 0
         END;
         v_extra_price := CASE WHEN v_sub.plan = 'enterprise' THEN 5 ELSE 0 END;
     END IF;
@@ -509,14 +515,14 @@ BEGIN
             'orders_used', v_cycle.orders_used,
             'extra_orders', v_cycle.extra_orders,
             'order_limit', v_plan_limit,
-            'limit_reached', (v_sub.plan IN ('starter', 'pro', 'trial') AND v_cycle.orders_used >= v_plan_limit)
+            'limit_reached', (v_sub.plan IN ('starter', 'pro', 'lifetime', 'trial') AND v_cycle.orders_used >= v_plan_limit)
         );
     END IF;
 
-    -- Check hard-stop limit
-    IF v_sub.plan IN ('starter', 'pro', 'trial') AND v_cycle.orders_used >= v_plan_limit THEN
+    -- Check hard-stop limit (starter, pro, lifetime, trial = hard stop; enterprise = soft stop with extra charges)
+    IF v_sub.plan IN ('starter', 'pro', 'lifetime', 'trial') AND v_cycle.orders_used >= v_plan_limit THEN
         RETURN jsonb_build_object(
-            'success', false, 'error', 'Monthly order limit reached', 'code', 'LIMIT_REACHED',
+            'success', false, 'error', 'Order limit reached for this cycle', 'code', 'LIMIT_REACHED',
             'orders_used', v_cycle.orders_used, 'order_limit', v_plan_limit, 'plan', v_sub.plan
         );
     END IF;
@@ -544,7 +550,7 @@ BEGIN
         'orders_used', v_cycle.orders_used,
         'extra_orders', v_cycle.extra_orders,
         'order_limit', v_plan_limit,
-        'limit_reached', (v_sub.plan IN ('starter', 'pro', 'trial') AND v_cycle.orders_used >= v_plan_limit),
+        'limit_reached', (v_sub.plan IN ('starter', 'pro', 'lifetime', 'trial') AND v_cycle.orders_used >= v_plan_limit),
         'extra_charge_per_order', COALESCE(v_extra_price, 0),
         'extra_charge_total', CASE WHEN v_sub.plan = 'enterprise' THEN v_cycle.extra_orders * COALESCE(v_extra_price, 5) ELSE 0 END
     );
@@ -660,12 +666,14 @@ $$;
 
 -- =============================================
 -- RPC: create_paid_subscription (Admin only)
+-- Accepts billing_term: monthly, yearly, two_year, lifetime
 -- =============================================
 CREATE OR REPLACE FUNCTION create_paid_subscription(
     p_email TEXT,
     p_full_name TEXT,
     p_phone TEXT,
-    p_plan TEXT
+    p_plan TEXT,
+    p_billing_term TEXT DEFAULT 'monthly'
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -676,13 +684,32 @@ DECLARE
     v_customer RECORD;
     v_key TEXT;
     v_plan_prefix TEXT;
-    v_plan_limit INT;
     v_now TIMESTAMPTZ := now();
-    v_billing_end TIMESTAMPTZ := now() + INTERVAL '30 days';
+    v_billing_end TIMESTAMPTZ;
+    v_billing_term TEXT;
+    v_cycle_end TIMESTAMPTZ;
 BEGIN
-    IF p_plan NOT IN ('starter', 'pro', 'enterprise') THEN
-        RETURN jsonb_build_object('success', false, 'error', 'Invalid plan');
+    IF p_plan NOT IN ('starter', 'pro', 'enterprise', 'lifetime') THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Invalid plan. Must be starter, pro, enterprise, or lifetime.');
     END IF;
+
+    -- Enforce lifetime plan must use lifetime billing_term
+    IF p_plan = 'lifetime' THEN
+        v_billing_term := 'lifetime';
+    ELSE
+        v_billing_term := COALESCE(p_billing_term, 'monthly');
+        IF v_billing_term NOT IN ('monthly', 'yearly', 'two_year') THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Invalid billing term. Must be monthly, yearly, or two_year.');
+        END IF;
+    END IF;
+
+    -- Calculate billing_end based on term
+    v_billing_end := CASE v_billing_term
+        WHEN 'monthly' THEN v_now + INTERVAL '1 month'
+        WHEN 'yearly' THEN v_now + INTERVAL '12 months'
+        WHEN 'two_year' THEN v_now + INTERVAL '24 months'
+        WHEN 'lifetime' THEN NULL  -- Lifetime never expires
+    END;
 
     -- Create or find customer
     SELECT * INTO v_customer FROM customers WHERE email = p_email;
@@ -697,7 +724,8 @@ BEGIN
 
     -- Generate key
     v_plan_prefix := CASE p_plan
-        WHEN 'starter' THEN 'STR' WHEN 'pro' THEN 'PRO' WHEN 'enterprise' THEN 'ENT'
+        WHEN 'starter' THEN 'STR' WHEN 'pro' THEN 'PRO'
+        WHEN 'enterprise' THEN 'ENT' WHEN 'lifetime' THEN 'LTM'
     END;
     v_key := 'MLK-' || v_plan_prefix || '-' ||
              upper(substr(md5(random()::text), 1, 4)) || '-' ||
@@ -705,27 +733,34 @@ BEGIN
 
     -- Create subscription
     INSERT INTO subscriptions (
-        customer_id, subscription_key, plan, status,
+        customer_id, subscription_key, plan, billing_term, status,
         billing_start, billing_end, last_validation_at
     ) VALUES (
-        v_customer.id, v_key, p_plan, 'active',
+        v_customer.id, v_key, p_plan, v_billing_term, 'active',
         v_now, v_billing_end, v_now
     ) RETURNING * INTO v_sub;
 
-    -- Create usage cycle
+    -- Create usage cycle (monthly cycle for all plans — resets every 30 days)
+    v_cycle_end := CASE
+        WHEN v_billing_end IS NULL THEN v_now + INTERVAL '30 days'  -- Lifetime: monthly cycles
+        WHEN v_billing_term = 'monthly' THEN v_billing_end
+        ELSE v_now + INTERVAL '30 days'  -- Yearly/two_year: still monthly usage cycles
+    END;
+
     INSERT INTO usage_cycles (subscription_id, cycle_start, cycle_end)
-    VALUES (v_sub.id, v_now, v_billing_end);
+    VALUES (v_sub.id, v_now, v_cycle_end);
 
     -- Log
     INSERT INTO admin_actions (subscription_id, customer_id, action_type, action_note)
     VALUES (v_sub.id, v_customer.id, 'subscription_created',
-            'Created ' || p_plan || ' subscription for ' || p_email);
+            'Created ' || p_plan || ' (' || v_billing_term || ') subscription for ' || p_email);
 
     RETURN jsonb_build_object(
         'success', true,
         'subscription_key', v_key,
         'subscription_id', v_sub.id,
         'plan', p_plan,
+        'billing_term', v_billing_term,
         'status', 'active',
         'billing_start', v_now,
         'billing_end', v_billing_end,
@@ -736,10 +771,11 @@ $$;
 
 -- =============================================
 -- RPC: renew_subscription (Admin only)
+-- Renews based on subscription's billing_term
 -- =============================================
 CREATE OR REPLACE FUNCTION renew_subscription(
     p_subscription_key TEXT,
-    p_months INT DEFAULT 1
+    p_months INT DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -750,11 +786,29 @@ DECLARE
     v_now TIMESTAMPTZ := now();
     v_new_start TIMESTAMPTZ;
     v_new_end TIMESTAMPTZ;
+    v_months INT;
+    v_cycle_end TIMESTAMPTZ;
 BEGIN
     SELECT * INTO v_sub FROM subscriptions WHERE subscription_key = p_subscription_key;
 
     IF NOT FOUND THEN
         RETURN jsonb_build_object('success', false, 'error', 'Subscription not found');
+    END IF;
+
+    -- Lifetime cannot be renewed
+    IF v_sub.plan = 'lifetime' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Lifetime subscriptions do not need renewal.');
+    END IF;
+
+    -- Calculate months based on billing_term (or use override)
+    IF p_months IS NOT NULL THEN
+        v_months := p_months;
+    ELSE
+        v_months := CASE v_sub.billing_term
+            WHEN 'yearly' THEN 12
+            WHEN 'two_year' THEN 24
+            ELSE 1  -- monthly
+        END;
     END IF;
 
     IF v_sub.billing_end IS NOT NULL AND v_sub.billing_end > v_now THEN
@@ -763,24 +817,31 @@ BEGIN
         v_new_start := v_now;
     END IF;
 
-    v_new_end := v_new_start + (p_months || ' months')::INTERVAL;
+    v_new_end := v_new_start + (v_months || ' months')::INTERVAL;
 
     UPDATE subscriptions
     SET billing_start = v_new_start, billing_end = v_new_end,
         status = 'active', updated_at = v_now
     WHERE id = v_sub.id;
 
+    -- Create usage cycle (monthly reset for all plans)
+    v_cycle_end := CASE
+        WHEN v_sub.billing_term = 'monthly' THEN v_new_end
+        ELSE v_new_start + INTERVAL '30 days'
+    END;
+
     INSERT INTO usage_cycles (subscription_id, cycle_start, cycle_end)
-    VALUES (v_sub.id, v_new_start, v_new_end);
+    VALUES (v_sub.id, v_new_start, v_cycle_end);
 
     INSERT INTO admin_actions (subscription_id, customer_id, action_type, action_note)
     VALUES (v_sub.id, v_sub.customer_id, 'subscription_renewed',
-            'Renewed for ' || p_months || ' month(s). New end: ' || v_new_end);
+            'Renewed (' || COALESCE(v_sub.billing_term, 'monthly') || ') for ' || v_months || ' month(s). New end: ' || v_new_end);
 
     RETURN jsonb_build_object(
         'success', true,
         'billing_start', v_new_start,
         'billing_end', v_new_end,
+        'billing_term', v_sub.billing_term,
         'status', 'active'
     );
 END;

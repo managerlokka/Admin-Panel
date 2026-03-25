@@ -84,7 +84,18 @@ export default function SubscriptionsPage() {
   };
 
   const statusFilters = ['', 'trial', 'active', 'expired', 'suspended'];
-  const planFilters = ['', 'trial', 'starter', 'pro', 'enterprise'];
+  const planFilters = ['', 'trial', 'starter', 'pro', 'enterprise', 'lifetime'];
+
+  const termLabels = { monthly: 'Monthly', yearly: 'Yearly', two_year: '2 Years', lifetime: 'Lifetime' };
+  const getPlanLabel = (s) => {
+    if (!s) return '—';
+    const plan = s.plan || '';
+    const term = s.billing_term || 'monthly';
+    if (plan === 'lifetime') return '♾️ Lifetime';
+    if (plan === 'trial') return '⏳ Trial';
+    const planName = plan.charAt(0).toUpperCase() + plan.slice(1);
+    return `${planName} (${termLabels[term] || term})`;
+  };
 
   return (
     <>
@@ -144,9 +155,9 @@ export default function SubscriptionsPage() {
                   <td style={{ fontWeight: 600 }}>{s.customers?.full_name || '—'}</td>
                   <td>{s.customers?.email || '—'}</td>
                   <td style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{s.subscription_key}</td>
-                  <td><span className={`badge badge--${s.plan}`}>{s.plan}</span></td>
+                  <td><span className={`badge badge--${s.plan}`}>{getPlanLabel(s)}</span></td>
                   <td><span className={`badge badge--${s.status}`}>{s.status}</span></td>
-                  <td>{s.billing_end ? new Date(s.billing_end).toLocaleDateString() : '—'}</td>
+                  <td>{s.plan === 'lifetime' ? '♾️ Never' : (s.billing_end ? new Date(s.billing_end).toLocaleDateString() : '—')}</td>
                   <td>{s.device_id ? '✅' : '—'}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <button className="btn btn--secondary btn--sm"
@@ -181,21 +192,27 @@ export default function SubscriptionsPage() {
               <div className="form-group">
                 <label>Plan</label>
                 <select name="plan" className="form-select">
-                  <option value="trial">Trial</option>
-                  <option value="starter">Starter</option>
-                  <option value="pro">Pro</option>
-                  <option value="enterprise">Enterprise</option>
+                  <option value="trial">Trial (4 days free)</option>
+                  <option value="starter">Starter — LKR 1,250/mo (250 orders)</option>
+                  <option value="pro">Pro — LKR 1,950/mo (600 orders)</option>
+                  <option value="enterprise">Enterprise — LKR 3,450/mo (3,000+ orders)</option>
+                  <option value="lifetime">♾️ Lifetime — LKR 24,500 (admin only)</option>
                 </select>
               </div>
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Billing Start</label>
-                <input name="billing_start" type="date" className="form-input" />
+                <label>Billing Term</label>
+                <select name="billing_term" className="form-select">
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly (2 months free)</option>
+                  <option value="two_year">2 Years (4 months free)</option>
+                  <option value="lifetime">Lifetime (one-time)</option>
+                </select>
               </div>
               <div className="form-group">
-                <label>Billing End</label>
-                <input name="billing_end" type="date" className="form-input" />
+                <label>Billing Start</label>
+                <input name="billing_start" type="date" className="form-input" />
               </div>
             </div>
             <div className="modal__footer" style={{ padding: 0, border: 'none', marginTop: '1rem' }}>
@@ -210,7 +227,7 @@ export default function SubscriptionsPage() {
       {showAction && (
         <ActionModal title={`⚙️ ${showAction.customers?.full_name}`} onClose={() => { setShowAction(null); setActiveAction(null); }}>
           <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
-            Key: <code style={{ color: 'var(--accent)' }}>{showAction.subscription_key}</code> · Plan: <span className={`badge badge--${showAction.plan}`}>{showAction.plan}</span> · Status: <span className={`badge badge--${showAction.status}`}>{showAction.status}</span>
+            Key: <code style={{ color: 'var(--accent)' }}>{showAction.subscription_key}</code> · Plan: <span className={`badge badge--${showAction.plan}`}>{getPlanLabel(showAction)}</span> · Status: <span className={`badge badge--${showAction.status}`}>{showAction.status}</span>
           </p>
 
           {/* Action buttons */}
@@ -240,15 +257,24 @@ export default function SubscriptionsPage() {
             <form className="action-form" onSubmit={(e) => {
               e.preventDefault();
               const plan = e.target.plan.value;
-              doAction('change_plan', showAction.id, { plan });
+              const billing_term = e.target.billing_term.value;
+              doAction('change_plan', showAction.id, { plan, billing_term });
             }}>
               <label>Select New Plan</label>
               <select name="plan" className="form-select" defaultValue="starter">
-                <option value="starter">🔵 Starter — LKR 1,250/mo</option>
-                <option value="pro">🟣 Pro — LKR 1,950/mo</option>
-                <option value="enterprise">🟠 Enterprise — LKR 3,450/mo</option>
+                <option value="starter">🔵 Starter — LKR 1,250/mo (250 orders)</option>
+                <option value="pro">🟣 Pro — LKR 1,950/mo (600 orders)</option>
+                <option value="enterprise">🟠 Enterprise — LKR 3,450/mo (3,000+ orders)</option>
+                <option value="lifetime">♾️ Lifetime — LKR 24,500 one-time (3,000 orders)</option>
               </select>
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+              <label style={{ marginTop: '0.5rem' }}>Billing Term</label>
+              <select name="billing_term" className="form-select" defaultValue={showAction.billing_term || 'monthly'}>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly (Save 2 months)</option>
+                <option value="two_year">2 Years (Save 4 months)</option>
+                <option value="lifetime">Lifetime (one-time)</option>
+              </select>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <button type="button" className="btn btn--secondary" onClick={() => setActiveAction(null)}>← Back</button>
                 <button type="submit" className="btn btn--primary">Apply</button>
               </div>

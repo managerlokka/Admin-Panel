@@ -54,6 +54,7 @@ export default function DashboardPage() {
         <StatCard icon="🔵" value={c.activeStarter} label="Starter" variant="blue" />
         <StatCard icon="⭐" value={c.activePro} label="Pro" variant="purple" />
         <StatCard icon="🏢" value={c.activeEnterprise} label="Enterprise" variant="orange" />
+        <StatCard icon="♾️" value={c.activeLifetime || 0} label="Lifetime" variant="cyan" />
         <StatCard icon="❌" value={c.expired} label="Expired" variant="red" />
         <StatCard icon="⛔" value={c.suspended} label="Suspended" variant="red" />
         <StatCard icon="⚠️" value={c.expiringSoon} label="Expiring Soon" variant="yellow" />
@@ -62,11 +63,12 @@ export default function DashboardPage() {
       {/* Revenue */}
       <h3 style={{ fontSize: '0.9rem', margin: '0.5rem 0 0.4rem' }}>💰 Revenue</h3>
       <div className="cards-grid">
-        <StatCard icon="💙" value={formatLKR(r.starterRevenue)} label="Starter MRR" variant="blue" />
-        <StatCard icon="💜" value={formatLKR(r.proRevenue)} label="Pro MRR" variant="purple" />
+        <StatCard icon="💙" value={formatLKR(r.starterRevenue)} label="Starter" variant="blue" />
+        <StatCard icon="💜" value={formatLKR(r.proRevenue)} label="Pro" variant="purple" />
         <StatCard icon="🧡" value={formatLKR(r.enterpriseBaseRevenue)} label="Enterprise" variant="orange" />
         <StatCard icon="📊" value={formatLKR(r.enterpriseExtraRevenue)} label="Extras" variant="cyan" />
-        <StatCard icon="💎" value={formatLKR(r.totalMRR)} label="Total MRR" variant="green" />
+        <StatCard icon="♾️" value={formatLKR(r.lifetimeRevenue || 0)} label="Lifetime" variant="yellow" />
+        <StatCard icon="💎" value={formatLKR(r.totalRevenue)} label="Total Revenue" variant="green" />
       </div>
 
       {/* Conversion */}

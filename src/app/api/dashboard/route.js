@@ -21,10 +21,11 @@ export async function GET() {
     const activeStarter = all.filter(s => s.status === 'active' && s.plan === 'starter').length;
     const activePro = all.filter(s => s.status === 'active' && s.plan === 'pro').length;
     const activeEnterprise = all.filter(s => s.status === 'active' && s.plan === 'enterprise').length;
+    const activeLifetime = all.filter(s => s.status === 'active' && s.plan === 'lifetime').length;
     const expired = all.filter(s => s.status === 'expired').length + trialExpired;
     const suspended = all.filter(s => s.status === 'suspended').length;
 
-    // Expiring soon (3 days)
+    // Expiring soon (3 days) — skip lifetime (no billing_end)
     const now = new Date();
     const threeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
     const expiringSoon = all.filter(s =>
@@ -37,10 +38,25 @@ export async function GET() {
     const prices = {};
     (planConfig || []).forEach(p => { prices[p.plan] = p; });
 
-    // Revenue estimates
-    const starterRevenue = activeStarter * (prices.starter?.monthly_price || 1250);
-    const proRevenue = activePro * (prices.pro?.monthly_price || 1950);
-    const enterpriseBaseRevenue = activeEnterprise * (prices.enterprise?.monthly_price || 3450);
+    // Revenue estimates — billing_term-aware
+    const activePaidSubs = all.filter(s => s.status === 'active' && s.plan !== 'trial');
+    let starterRevenue = 0, proRevenue = 0, enterpriseBaseRevenue = 0, lifetimeRevenue = 0;
+
+    activePaidSubs.forEach(s => {
+      const pc = prices[s.plan];
+      if (!pc) return;
+      const term = s.billing_term || 'monthly';
+
+      // Get the correct price based on billing_term
+      let price = pc.monthly_price;
+      if (term === 'yearly' && pc.yearly_price) price = pc.yearly_price;
+      else if (term === 'two_year' && pc.two_year_price) price = pc.two_year_price;
+
+      if (s.plan === 'starter') starterRevenue += Number(price);
+      else if (s.plan === 'pro') proRevenue += Number(price);
+      else if (s.plan === 'enterprise') enterpriseBaseRevenue += Number(price);
+      else if (s.plan === 'lifetime') lifetimeRevenue += Number(price);
+    });
 
     // Fetch usage for enterprise extra orders
     const enterpriseSubs = all.filter(s => s.status === 'active' && s.plan === 'enterprise');
@@ -59,7 +75,7 @@ export async function GET() {
       });
     }
 
-    const totalMRR = starterRevenue + proRevenue + enterpriseBaseRevenue + enterpriseExtraRevenue;
+    const totalRevenue = starterRevenue + proRevenue + enterpriseBaseRevenue + enterpriseExtraRevenue + lifetimeRevenue;
 
     // Usage near limit
     const { data: allUsage } = await supabaseAdmin
@@ -97,6 +113,7 @@ export async function GET() {
         activeStarter,
         activePro,
         activeEnterprise,
+        activeLifetime,
         expired,
         suspended,
         expiringSoon,
@@ -107,7 +124,8 @@ export async function GET() {
         proRevenue,
         enterpriseBaseRevenue,
         enterpriseExtraRevenue,
-        totalMRR,
+        lifetimeRevenue,
+        totalRevenue,
       },
       conversion: {
         trialSignups,
