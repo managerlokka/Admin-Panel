@@ -27,6 +27,8 @@ export default function SubscriptionsPage() {
   const [showAction, setShowAction] = useState(null);
   const [activeAction, setActiveAction] = useState(null);
   const [toast, setToast] = useState(null);
+  const [cpPlan, setCpPlan] = useState('starter');
+  const [cpTerm, setCpTerm] = useState('monthly');
 
   const fetchSubs = () => {
     setLoading(true);
@@ -161,7 +163,7 @@ export default function SubscriptionsPage() {
                   <td>{s.device_id ? '✅' : '—'}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <button className="btn btn--secondary btn--sm"
-                      onClick={() => { setShowAction(s); setActiveAction(null); }}>⚙️</button>
+                      onClick={() => { setShowAction(s); setActiveAction(null); setCpPlan(s.plan || 'starter'); setCpTerm(s.billing_term || 'monthly'); }}>⚙️</button>
                   </td>
                 </tr>
               ))}
@@ -256,23 +258,29 @@ export default function SubscriptionsPage() {
           {activeAction === 'change_plan' && (
             <form className="action-form" onSubmit={(e) => {
               e.preventDefault();
-              const plan = e.target.plan.value;
-              const billing_term = e.target.billing_term.value;
-              doAction('change_plan', showAction.id, { plan, billing_term });
+              doAction('change_plan', showAction.id, { plan: cpPlan, billing_term: cpPlan === 'lifetime' ? 'lifetime' : cpTerm });
             }}>
               <label>Select New Plan</label>
-              <select name="plan" className="form-select" defaultValue="starter">
+              <select className="form-select" value={cpPlan}
+                onChange={(e) => { setCpPlan(e.target.value); if (e.target.value === 'lifetime') setCpTerm('lifetime'); }}>
                 <option value="starter">🔵 Starter — LKR 1,250/mo (250 orders)</option>
                 <option value="pro">🟣 Pro — LKR 1,950/mo (600 orders)</option>
                 <option value="enterprise">🟠 Enterprise — LKR 3,450/mo (3,000+ orders)</option>
                 <option value="lifetime">♾️ Lifetime — LKR 24,500 one-time (3,000 orders)</option>
               </select>
               <label style={{ marginTop: '0.5rem' }}>Billing Term</label>
-              <select name="billing_term" className="form-select" defaultValue={showAction.billing_term || 'monthly'}>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly (Save 2 months)</option>
-                <option value="two_year">2 Years (Save 4 months)</option>
-                <option value="lifetime">Lifetime (one-time)</option>
+              <select className="form-select" value={cpPlan === 'lifetime' ? 'lifetime' : cpTerm}
+                disabled={cpPlan === 'lifetime'}
+                onChange={(e) => setCpTerm(e.target.value)}>
+                {cpPlan === 'lifetime' ? (
+                  <option value="lifetime">Lifetime (one-time payment)</option>
+                ) : (
+                  <>
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly (Save 2 months)</option>
+                    <option value="two_year">2 Years (Save 4 months)</option>
+                  </>
+                )}
               </select>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <button type="button" className="btn btn--secondary" onClick={() => setActiveAction(null)}>← Back</button>
