@@ -26,6 +26,7 @@ export default function CustomerDetailPage() {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [activeAction, setActiveAction] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
   const fetchData = () => {
     fetch(`/api/customers/${params.id}`)
@@ -64,6 +65,24 @@ export default function CustomerDetailPage() {
     } catch (err) { showToast(err.message, 'error'); }
   };
 
+  const handleEditProfile = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`/api/customers/${params.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editForm),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error);
+      showToast('Profile updated successfully');
+      setActiveAction(null);
+      fetchData();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
   if (loading) return <div className="loading-spinner"><div className="spinner"></div></div>;
   if (!customer) return <div className="empty-state"><div className="empty-state__icon">❌</div><div className="empty-state__text">Customer not found</div></div>;
 
@@ -77,6 +96,15 @@ export default function CustomerDetailPage() {
       {/* Action Buttons */}
       {sub && (
         <div className="actions-bar">
+          <button className="btn btn--primary btn--sm" onClick={() => {
+            setEditForm({
+              full_name: customer.full_name || '',
+              email: customer.email || '',
+              phone: customer.phone || '',
+              notes: customer.notes || '',
+            });
+            setActiveAction('edit_profile');
+          }}>✏️ Edit Profile</button>
           <button className="btn btn--primary btn--sm" onClick={() => setActiveAction('change_plan')}>🔄 Change Plan</button>
           <button className="btn btn--secondary btn--sm" onClick={() => setActiveAction('extend_trial')}>⏳ Extend Trial</button>
           <button className="btn btn--secondary btn--sm" onClick={() => setActiveAction('extend_billing')}>📅 Extend Billing</button>
@@ -96,7 +124,8 @@ export default function CustomerDetailPage() {
           <div className="detail-section__title">👤 Profile</div>
           <div className="detail-row"><span className="detail-row__label">Name</span><span className="detail-row__value">{customer.full_name}</span></div>
           <div className="detail-row"><span className="detail-row__label">Email</span><span className="detail-row__value">{customer.email || '—'}</span></div>
-          <div className="detail-row"><span className="detail-row__label">Phone</span><span className="detail-row__value">{customer.phone || '—'}</span></div>
+          <div className="detail-row"><span className="detail-row__label">Phone</span><span className="detail-row__value" style={{ fontWeight: 600, color: customer.phone ? 'var(--green)' : 'var(--text-muted)' }}>{customer.phone || '—'}</span></div>
+          <div className="detail-row"><span className="detail-row__label">Notes</span><span className="detail-row__value">{customer.notes || '—'}</span></div>
           <div className="detail-row"><span className="detail-row__label">Created</span><span className="detail-row__value">{new Date(customer.created_at).toLocaleDateString()}</span></div>
         </div>
 
@@ -177,6 +206,30 @@ export default function CustomerDetailPage() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Edit Profile Modal */}
+      {activeAction === 'edit_profile' && (
+        <ActionModal title="✏️ Edit Profile" onClose={() => setActiveAction(null)}>
+          <form className="action-form" onSubmit={handleEditProfile}>
+            <label>Full Name</label>
+            <input className="form-input" value={editForm.full_name}
+              onChange={e => setEditForm({ ...editForm, full_name: e.target.value })} required />
+            <label>Email</label>
+            <input className="form-input" type="email" value={editForm.email}
+              onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
+            <label>Phone / WhatsApp</label>
+            <input className="form-input" value={editForm.phone}
+              onChange={e => setEditForm({ ...editForm, phone: e.target.value })} placeholder="07XXXXXXXX" />
+            <label>Notes</label>
+            <textarea className="form-input" rows={3} value={editForm.notes}
+              onChange={e => setEditForm({ ...editForm, notes: e.target.value })} placeholder="Any notes about this customer..." />
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+              <button type="button" className="btn btn--secondary" onClick={() => setActiveAction(null)}>Cancel</button>
+              <button type="submit" className="btn btn--primary">Save</button>
+            </div>
+          </form>
+        </ActionModal>
       )}
 
       {/* Action Modals */}
