@@ -84,7 +84,31 @@ export async function POST(request) {
           return NextResponse.json({ error: 'New billing_end date required' }, { status: 400 });
         }
         updateData.billing_end = data.billing_end;
+        // Also set status to active if currently expired
+        if (sub.status === 'expired') {
+          updateData.status = 'active';
+        }
         actionNote = `Billing extended to ${data.billing_end} for ${sub.customers?.full_name}`;
+        break;
+      }
+
+      case 'renew_month': {
+        // Clean 30-day renewal from today
+        const now = new Date();
+        const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+        updateData.billing_start = now.toISOString();
+        updateData.billing_end = end.toISOString();
+        updateData.status = 'active';
+
+        // Create new usage cycle (fresh start for the new month)
+        await supabaseAdmin.from('usage_cycles').insert({
+          subscription_id,
+          cycle_start: now.toISOString(),
+          cycle_end: end.toISOString(),
+        });
+
+        actionNote = `Renewed for 30 days (${now.toLocaleDateString()} → ${end.toLocaleDateString()}) for ${sub.customers?.full_name}`;
         break;
       }
 
@@ -95,8 +119,23 @@ export async function POST(request) {
       }
 
       case 'reactivate': {
+        // Reactivate with fresh 30-day billing period
+        const reactivateNow = new Date();
+        const reactivateEnd = new Date(reactivateNow.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+        // For trial plans, keep trial status; for paid plans, set active
         updateData.status = sub.plan === 'trial' ? 'trial' : 'active';
-        actionNote = `Subscription reactivated for ${sub.customers?.full_name}`;
+        updateData.billing_start = reactivateNow.toISOString();
+        updateData.billing_end = reactivateEnd.toISOString();
+
+        // Create new usage cycle
+        await supabaseAdmin.from('usage_cycles').insert({
+          subscription_id,
+          cycle_start: reactivateNow.toISOString(),
+          cycle_end: reactivateEnd.toISOString(),
+        });
+
+        actionNote = `Reactivated with new billing period (${reactivateNow.toLocaleDateString()} → ${reactivateEnd.toLocaleDateString()}) for ${sub.customers?.full_name}`;
         break;
       }
 

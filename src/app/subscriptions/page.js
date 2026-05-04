@@ -16,6 +16,61 @@ function ActionModal({ title, children, onClose }) {
   );
 }
 
+// Helper: calculate days remaining from a date
+function getDaysRemaining(endDate) {
+  if (!endDate) return null;
+  const end = new Date(endDate);
+  const now = new Date();
+  const diff = end - now;
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+// Helper: render days remaining badge
+function DaysRemainingBadge({ sub }) {
+  if (sub.plan === 'lifetime') {
+    return <span style={{ color: '#8b5cf6', fontWeight: 600, fontSize: '0.8rem' }}>♾️ No Expiry</span>;
+  }
+  if (sub.status === 'suspended') {
+    return <span style={{ color: '#6b7280', fontWeight: 600, fontSize: '0.8rem' }}>⛔ Suspended</span>;
+  }
+
+  const endDate = sub.billing_end || sub.trial_end;
+  const days = getDaysRemaining(endDate);
+
+  if (days === null) {
+    return <span style={{ color: '#6b7280', fontSize: '0.8rem' }}>—</span>;
+  }
+
+  if (days <= 0) {
+    return (
+      <span style={{
+        background: 'rgba(239,68,68,0.15)', color: '#ef4444',
+        padding: '2px 8px', borderRadius: '6px', fontWeight: 700, fontSize: '0.78rem'
+      }}>
+        ❌ Expired
+      </span>
+    );
+  }
+
+  let bg, color, icon;
+  if (days <= 2) {
+    bg = 'rgba(239,68,68,0.12)'; color = '#ef4444'; icon = '🔴';
+  } else if (days <= 9) {
+    bg = 'rgba(245,158,11,0.12)'; color = '#f59e0b'; icon = '🟡';
+  } else {
+    bg = 'rgba(34,197,94,0.1)'; color = '#22c55e'; icon = '🟢';
+  }
+
+  return (
+    <span style={{
+      background: bg, color, padding: '2px 8px', borderRadius: '6px',
+      fontWeight: 700, fontSize: '0.78rem'
+    }}>
+      {icon} {days}d
+    </span>
+  );
+}
+
 export default function SubscriptionsPage() {
   const router = useRouter();
   const [subs, setSubs] = useState([]);
@@ -99,6 +154,28 @@ export default function SubscriptionsPage() {
     return `${planName} (${termLabels[term] || term})`;
   };
 
+  // Sort: expiring-soon first, then active, then expired/suspended
+  const sortedSubs = [...subs].sort((a, b) => {
+    const daysA = getDaysRemaining(a.billing_end || a.trial_end);
+    const daysB = getDaysRemaining(b.billing_end || b.trial_end);
+    // Suspended/no-date go to bottom
+    if (a.status === 'suspended' && b.status !== 'suspended') return 1;
+    if (b.status === 'suspended' && a.status !== 'suspended') return -1;
+    if (a.plan === 'lifetime' && b.plan !== 'lifetime') return 1;
+    if (b.plan === 'lifetime' && a.plan !== 'lifetime') return -1;
+    // Sort by days remaining ascending (expiring soonest first)
+    if (daysA === null) return 1;
+    if (daysB === null) return -1;
+    return daysA - daysB;
+  });
+
+  // Renew helper: compute new dates for display
+  const getRenewDates = () => {
+    const now = new Date();
+    const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    return { start: now.toLocaleDateString(), end: end.toLocaleDateString() };
+  };
+
   return (
     <>
       <div className="page-header">
@@ -148,11 +225,12 @@ export default function SubscriptionsPage() {
               <tr>
                 <th>Customer</th><th>Email</th><th>Key</th>
                 <th>Plan</th><th>Status</th><th>Billing End</th>
+                <th>⏳ Days Left</th>
                 <th>Device</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {subs.map(s => (
+              {sortedSubs.map(s => (
                 <tr key={s.id} onClick={() => router.push(`/customers/${s.customer_id}`)}>
                   <td style={{ fontWeight: 600 }}>{s.customers?.full_name || '—'}</td>
                   <td>{s.customers?.email || '—'}</td>
@@ -160,6 +238,7 @@ export default function SubscriptionsPage() {
                   <td><span className={`badge badge--${s.plan}`}>{getPlanLabel(s)}</span></td>
                   <td><span className={`badge badge--${s.status}`}>{s.status}</span></td>
                   <td>{s.plan === 'lifetime' ? '♾️ Never' : (s.billing_end ? new Date(s.billing_end).toLocaleDateString() : '—')}</td>
+                  <td><DaysRemainingBadge sub={s} /></td>
                   <td>{s.device_id ? '✅' : '—'}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <button className="btn btn--secondary btn--sm"
@@ -225,23 +304,37 @@ export default function SubscriptionsPage() {
         </ActionModal>
       )}
 
-      {/* Quick Actions Modal — with inline forms */}
+      {/* Quick Actions Modal */}
       {showAction && (
         <ActionModal title={`⚙️ ${showAction.customers?.full_name}`} onClose={() => { setShowAction(null); setActiveAction(null); }}>
-          <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+          <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
             Key: <code style={{ color: 'var(--accent)' }}>{showAction.subscription_key}</code> · Plan: <span className={`badge badge--${showAction.plan}`}>{getPlanLabel(showAction)}</span> · Status: <span className={`badge badge--${showAction.status}`}>{showAction.status}</span>
           </p>
+          {/* Current billing info */}
+          <div style={{
+            background: 'var(--surface-muted, rgba(0,0,0,0.04))', borderRadius: '8px',
+            padding: '0.5rem 0.75rem', marginBottom: '0.75rem', fontSize: '0.78rem',
+            display: 'flex', gap: '1rem', flexWrap: 'wrap'
+          }}>
+            <span>📅 Start: <strong>{showAction.billing_start ? new Date(showAction.billing_start).toLocaleDateString() : '—'}</strong></span>
+            <span>📅 End: <strong>{showAction.billing_end ? new Date(showAction.billing_end).toLocaleDateString() : (showAction.plan === 'lifetime' ? '♾️ Never' : '—')}</strong></span>
+            <span>⏳ <strong><DaysRemainingBadge sub={showAction} /></strong></span>
+          </div>
 
           {/* Action buttons */}
           {!activeAction && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              <button className="btn btn--primary" onClick={() => setActiveAction('renew_month')}>📅 Renew Next Month (30 days)</button>
               <button className="btn btn--primary" onClick={() => setActiveAction('change_plan')}>🔄 Change Plan</button>
               <button className="btn btn--secondary" onClick={() => setActiveAction('extend_trial')}>⏳ Extend Trial</button>
-              <button className="btn btn--secondary" onClick={() => setActiveAction('extend_billing')}>📅 Extend Billing</button>
+              <button className="btn btn--secondary" onClick={() => setActiveAction('extend_billing')}>📅 Custom Dates (Extend Billing)</button>
               {showAction.status !== 'suspended' ? (
                 <button className="btn btn--danger" onClick={() => setActiveAction('suspend')}>⛔ Suspend</button>
               ) : (
-                <button className="btn btn--success" onClick={() => doAction('reactivate', showAction.id)}>✅ Reactivate</button>
+                <button className="btn btn--success" onClick={() => setActiveAction('reactivate')}>✅ Reactivate (+ 30 days)</button>
+              )}
+              {showAction.status === 'expired' && (
+                <button className="btn btn--success" onClick={() => setActiveAction('reactivate')}>✅ Reactivate Expired (+ 30 days)</button>
               )}
               <button className="btn btn--secondary" onClick={() => setActiveAction('reset_device')}>💻 Reset Device</button>
               <button className="btn btn--success" onClick={() => setActiveAction('mark_payment')}>💰 Mark Payment</button>
@@ -253,6 +346,41 @@ export default function SubscriptionsPage() {
               }}>🗑️ Delete Signup</button>
             </div>
           )}
+
+          {/* Renew Next Month Confirmation */}
+          {activeAction === 'renew_month' && (() => {
+            const dates = getRenewDates();
+            return (
+              <div className="action-form">
+                <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>📅 Renew Next Month</p>
+                <div style={{
+                  background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
+                  borderRadius: '10px', padding: '0.75rem', marginBottom: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.35rem' }}>
+                    <span>New Start:</span>
+                    <strong style={{ color: '#22c55e' }}>{dates.start}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.35rem' }}>
+                    <span>New End:</span>
+                    <strong style={{ color: '#22c55e' }}>{dates.end}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                    <span>Duration:</span>
+                    <strong>30 days</strong>
+                  </div>
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                  ✅ Status will be set to <strong>active</strong><br />
+                  ✅ New usage cycle created (fresh order quota)
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="btn btn--secondary" onClick={() => setActiveAction(null)}>← Back</button>
+                  <button className="btn btn--success" onClick={() => doAction('renew_month', showAction.id)}>✅ Confirm Renew</button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Change Plan Form */}
           {activeAction === 'change_plan' && (
@@ -306,7 +434,7 @@ export default function SubscriptionsPage() {
             </form>
           )}
 
-          {/* Extend Billing Form */}
+          {/* Extend Billing Form (Custom Dates) */}
           {activeAction === 'extend_billing' && (
             <form className="action-form" onSubmit={(e) => {
               e.preventDefault();
@@ -316,6 +444,9 @@ export default function SubscriptionsPage() {
               <label>New Billing End Date</label>
               <input name="billing_end" type="date" className="form-input" required
                 defaultValue={showAction.billing_end ? new Date(showAction.billing_end).toISOString().split('T')[0] : ''} />
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                ⚠️ Custom dates — use "Renew Next Month" for standard 30-day renewals
+              </p>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
                 <button type="button" className="btn btn--secondary" onClick={() => setActiveAction(null)}>← Back</button>
                 <button type="submit" className="btn btn--primary">Extend Billing</button>
@@ -334,6 +465,38 @@ export default function SubscriptionsPage() {
               </div>
             </div>
           )}
+
+          {/* Reactivate Confirm */}
+          {activeAction === 'reactivate' && (() => {
+            const dates = getRenewDates();
+            return (
+              <div className="action-form">
+                <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>✅ Reactivate Subscription</p>
+                <div style={{
+                  background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
+                  borderRadius: '10px', padding: '0.75rem', marginBottom: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.35rem' }}>
+                    <span>New Start:</span>
+                    <strong style={{ color: '#22c55e' }}>{dates.start}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                    <span>New End:</span>
+                    <strong style={{ color: '#22c55e' }}>{dates.end}</strong>
+                  </div>
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                  ✅ Status: <strong>{showAction.plan === 'trial' ? 'trial' : 'active'}</strong><br />
+                  ✅ New 30-day billing period<br />
+                  ✅ New usage cycle (fresh order quota)
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="btn btn--secondary" onClick={() => setActiveAction(null)}>← Cancel</button>
+                  <button className="btn btn--success" onClick={() => doAction('reactivate', showAction.id)}>✅ Confirm Reactivate</button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Reset Device Confirm */}
           {activeAction === 'reset_device' && (
